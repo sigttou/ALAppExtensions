@@ -232,26 +232,6 @@ jobs:
               $step--
           }
 
-  CheckForUpdates:
-    runs-on: [ windows-latest ]
-    needs: [ Initialization ]
-    if: github.event_name != 'workflow_run'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Read settings
-        uses: microsoft/AL-Go-Actions/ReadSettings@preview
-        with:
-          parentTelemetryScopeJson: ${{ needs.Initialization.outputs.telemetryScopeJson }}
-          get: TemplateUrl
-
-      - name: Check for updates to AL-Go system files
-        uses: microsoft/AL-Go-Actions/CheckForUpdates@preview
-        with:
-          parentTelemetryScopeJson: ${{ needs.Initialization.outputs.telemetryScopeJson }}
-          templateUrl: ${{ env.TemplateUrl }}
-
   Build:
     needs: [ Initialization ]
     if: ${{ needs.Initialization.outputs.projectCount > 0 }}
@@ -552,153 +532,6 @@ jobs:
           parentTelemetryScopeJson: ${{ needs.Initialization.outputs.telemetryScopeJson }}
           Project: ${{ matrix.project }}
 
-  Deploy:
-    needs: [ Initialization, Build ]
-    if: always() && needs.Build.result == 'Success' && github.event_name != 'workflow_run' && github.ref_name == 'main' && needs.Initialization.outputs.environmentCount > 0
-    strategy: ${{ fromJson(needs.Initialization.outputs.environments) }}
-    runs-on: ${{ fromJson(matrix.os) }}
-    name: Deploy to ${{ matrix.environment }}
-    environment:
-      name: ${{ matrix.environment }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v3
-        with:
-          path: '${{ github.workspace }}\.artifacts'
-
-      - name: EnvName
-        id: envName
-        run: |
-          $ErrorActionPreference = "STOP"
-          $envName = '${{ matrix.environment }}'.split(' ')[0]
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "envName=$envName"
-
-      - name: Read settings
-        uses: microsoft/AL-Go-Actions/ReadSettings@preview
-
-      - name: Read secrets
-        uses: microsoft/AL-Go-Actions/ReadSecrets@preview
-        env:
-          secrets: ${{ toJson(secrets) }}
-        with:
-          settingsJson: ${{ env.Settings }}
-          secrets: '${{ steps.envName.outputs.envName }}-AuthContext,${{ steps.envName.outputs.envName }}_AuthContext,AuthContext,${{ steps.envName.outputs.envName }}-EnvironmentName,${{ steps.envName.outputs.envName }}_EnvironmentName,EnvironmentName,Projects'
-
-      - name: AuthContext
-        id: authContext
-        run: |
-          $ErrorActionPreference = "STOP"
-          $envName = '${{ steps.envName.outputs.envName }}'
-          $authContext = $null
-          "$($envName)-AuthContext", "$($envName)_AuthContext", "AuthContext" | ForEach-Object {
-            if (!($authContext)) {
-              $authContext = [System.Environment]::GetEnvironmentVariable($_)
-              if ($authContext) {
-                Write-Host "Using $_ secret"
-              }
-            }            
-          }
-          if (!($authContext)) {
-            Write-Host "::Error::No AuthContext provided"
-            exit 1
-          }
-          $environmentName = $null
-          "$($envName)-EnvironmentName", "$($envName)_EnvironmentName", "EnvironmentName" | ForEach-Object {
-            if (!($EnvironmentName)) {
-              $EnvironmentName = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String([System.Environment]::GetEnvironmentVariable($_)))
-              if ($EnvironmentName) {
-                Write-Host "Using $_ secret"
-              }
-            }            
-          }
-          if (!($environmentName)) {
-            $environmentName = '${{ steps.envName.outputs.envName }}'
-          }
-          $environmentName = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(($environmentName + '${{ matrix.environment }}'.SubString($envName.Length)).ToUpperInvariant()))
-
-          $projects = [System.Environment]::GetEnvironmentVariable("$($envName)-Projects")
-          if (-not $projects) {
-            $projects = [System.Environment]::GetEnvironmentVariable("$($envName)_Projects")
-            if (-not $projects) {
-              $projects = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String([System.Environment]::GetEnvironmentVariable('projects')))
-            }
-          }
-          if ($projects -eq '') {
-            $projects = '*'
-          }
-          else {
-            $buildProjects = '${{ needs.Initialization.outputs.projects }}' | ConvertFrom-Json
-            $projects = ($projects.Split(',') | Where-Object { $buildProjects -contains $_ }) -join ','
-          }
-
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "authContext=$authContext"
-          Write-Host "authContext=$authContext"
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "environmentName=$environmentName"
-          Write-Host "environmentName=$environmentName"
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "projects=$projects"
-          Write-Host "projects=$projects"
-
-      - name: Deploy
-        uses: microsoft/AL-Go-Actions/Deploy@preview
-        env:
-          authContext: ${{ steps.authContext.outputs.authContext }}
-        with:
-          type: 'CD'
-          projects: ${{ steps.authContext.outputs.projects }}
-          environmentName: ${{ steps.authContext.outputs.environmentName }}
-          artifacts: '${{ github.workspace }}\.artifacts'
-
-  Deliver:
-    needs: [ Initialization, Build ]
-    if: always() && needs.Build.result == 'Success' && github.event_name != 'workflow_run' && github.ref_name == 'main' && needs.Initialization.outputs.deliveryTargetCount > 0
-    strategy:
-      matrix:
-        deliveryTarget: ${{ fromJson(needs.Initialization.outputs.deliveryTargets) }}
-      fail-fast: false
-    runs-on: [ windows-latest ]
-    name: Deliver to ${{ matrix.deliveryTarget }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v3
-        with:
-          path: '${{ github.workspace }}\.artifacts'
-
-      - name: Read settings
-        uses: microsoft/AL-Go-Actions/ReadSettings@preview
-
-      - name: Read secrets
-        uses: microsoft/AL-Go-Actions/ReadSecrets@preview
-        env:
-          secrets: ${{ toJson(secrets) }}
-        with:
-          settingsJson: ${{ env.Settings }}
-          secrets: '${{ matrix.deliveryTarget }}Context'
-
-      - name: DeliveryContext
-        id: deliveryContext
-        run: |
-          $ErrorActionPreference = "STOP"
-          $contextName = '${{ matrix.deliveryTarget }}Context'
-          $deliveryContext = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String([System.Environment]::GetEnvironmentVariable($contextName)))
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "deliveryContext=$deliveryContext"
-          Write-Host "deliveryContext=$deliveryContext"
-
-      - name: Deliver
-        uses: microsoft/AL-Go-Actions/Deliver@preview
-        env:
-          deliveryContext: ${{ steps.deliveryContext.outputs.deliveryContext }}
-        with:
-          type: 'CD'
-          projects: ${{ needs.Initialization.outputs.projects }}
-          deliveryTarget: ${{ matrix.deliveryTarget }}
-          artifacts: '${{ github.workspace }}\.artifacts'
-
   UpdatePRcheck:
     if: always() && github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
     runs-on: [ windows-latest ]
@@ -719,7 +552,7 @@ jobs:
   PostProcess:
     if: (!cancelled()) && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: [ windows-latest ]
-    needs: [ Initialization, Build, Deploy, Deliver ]
+    needs: [ Initialization, Build ]
     steps:
       - name: Checkout
         uses: actions/checkout@v3
