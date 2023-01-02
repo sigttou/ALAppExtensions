@@ -4,11 +4,6 @@ on:
   workflow_run:
     workflows: ["CICD"]
     types: [completed]
-  push:
-    paths-ignore:
-      - '**.md'
-      - '.github/workflows/*.yaml'
-    branches: [ 'main', 'release/*', 'feature/*' ]
 
 run-name: 'Release ALAppExtension to NuGet'
 
